@@ -13,6 +13,6 @@ public class Application {
 
     @RequestMapping(value = "/", produces = "text/plain")
     public String index() {
-        return "Hello from PC's edit";
+        return "Hello from John's edit";
     }
 }
