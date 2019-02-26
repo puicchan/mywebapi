@@ -1,6 +1,7 @@
-node {
+node('master') {
     // Variable to record user's input
     def userInput
+    def devSpaceNamespace = "$env.GITHUB_PR_SOURCE_BRANCH-helm"
 
     stage('init') {
         checkout scm
@@ -20,14 +21,14 @@ node {
             kubeconfigId: env.KUBE_CONFIG_ID, 
             resourceGroupName: env.AKS_RES_GROUP, 
             sharedSpaceName: env.PARENT_DEV_SPACE, 
-            spaceName: env.GITHUB_PR_SOURCE_BRANCH
+            spaceName: devSpaceNamespace
     }
 
     stage('deploy') {
-        kubernetesDeploy deployTypeClass: [configs: 'kubeconfigs/**'],
-            dockerCredentials: [[credentialsId: env.ACR_CRED_ID, url: "http://$env.ACR_REGISTRY"]],
-            kubeconfigId: env.KUBE_CONFIG_ID,
-            secretNamespace: env.GITHUB_PR_SOURCE_BRANCH
+        def registrySecretName = "helm-secret-$env.BUILD_NUMBER"
+        sh "kubectl create secret docker-registry ${registrySecretName} --docker-server=$env.ACR_REGISTRY --docker-username=$env.ACR_NAME --docker-password=$env.ACR_SECRET --namespace=${devSpaceNamespace}"
+        sh "helm init --tiller-namespace azds"
+        sh "helm upgrade  mywebapi${devSpaceNamespace} ./charts/mywebapi --install --namespace ${devSpaceNamespace} --set image.repository=$env.ACR_REGISTRY/$env.IMAGE_NAME --set image.tag=$env.BUILD_NUMBER --set ingress.hosts={localhost}  --set imagePullSecrets[0].name=${registrySecretName} --tiller-namespace azds"
     }
 
     stage('smoketest') {
@@ -36,7 +37,12 @@ node {
         SITE_UP = false
         for (int i = 0; i < 10; i++) {
             sh "sleep ${SLEEP_TIME}"
-            code = sh returnStdout: true, script: "curl -sL -w '%{http_code}' 'http://$env.azdsprefix.$env.TEST_ENDPOINT/greeting' -o /dev/null"
+            code = "0"
+            try {
+                code = sh returnStdout: true, script: "curl -sL -w '%{http_code}' 'http://$env.azdsprefix.$env.TEST_ENDPOINT/greeting' -o /dev/null"
+            } catch (Exception e){
+                // ignore
+            }
             if (code == "200") {
                 sh "curl http://$env.azdsprefix.$env.TEST_ENDPOINT/greeting"
                 SITE_UP = true
@@ -47,12 +53,18 @@ node {
             echo "The site has not been up after five minutes"
         }
     }
-      
+     
+
     stage('confirm merge') {
+
         // This is just an example for how an email can be triggered… can be anything and up to customers to define.
+
         // mail (to: 'to@example.com',
+
         // subject: "Job ${env.JOB_NAME}' (${env.BUILD_NUMBER}) is waiting for input",
+
         // body: "Please go to ${env.BUILD_URL}.")
+
         // input 'Ready to go?'
 
         // Wait for users to decide whether continue the process
@@ -66,11 +78,12 @@ node {
         }
     }
 
+
     if (userInput == true) {
         stage('deploy') {
             // Apply the deployment to shared namespace in AKS using acsDeploy, Helm or kubectl   
         }
-        
+
         stage('Verify') {
             // verify the staging environment is working properly
         }
@@ -82,7 +95,7 @@ node {
     stage('cleanup') {
         // devSpacesCleanup aksName: env.AKS_NAME, 
         //     azureCredentialsId: env.AZURE_CRED_ID, 
-        //     devSpaceName: env.GITHUB_PR_SOURCE_BRANCH, 
+        //     devSpaceName: devSpaceNamespace, 
         //     kubeConfigId: env.KUBE_CONFIG_ID, 
         //     resourceGroupName: env.AKS_RES_GROUP
     }
